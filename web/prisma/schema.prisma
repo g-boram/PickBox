@@ -1,0 +1,148 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum TradeStatus {
+  CREATED
+  MATCHED
+  STORED
+  COMPLETED
+  CANCELED
+  EXPIRED
+}
+
+enum LockerStatus {
+  EMPTY
+  AWAIT_DROP
+  OCCUPIED
+  AWAIT_PICKUP
+}
+
+enum QrPurpose {
+  DROP
+  PICKUP
+}
+
+enum LockerEventType {
+  ASSIGNED // QR 스캔으로 칸 배정
+  DOOR_OPEN
+  DOOR_CLOSE
+  STORED // 보관 완료
+  PICKED_UP // 수령 완료
+  ASSIGN_TIMEOUT // 60초 안에 문을 안 열어 배정 취소
+  UNEXPECTED_OPEN // 배정 안 된 칸이 열림
+  DOOR_LEFT_OPEN // 3분 이상 열려 있음
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  nickname     String
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+
+  sellingTrades Trade[] @relation("Seller")
+  buyingTrades  Trade[] @relation("Buyer")
+  qrTokens      QrToken[]
+}
+
+model Trade {
+  id          String      @id @default(cuid())
+  code        String      @unique // 6자리 거래 코드
+  sellerId    String
+  buyerId     String?
+  itemName    String
+  price       Int
+  memo        String?
+  status      TradeStatus @default(CREATED)
+  lockerId    String?     @unique // 보관 중인 칸 (STORED일 때만)
+  createdAt   DateTime    @default(now())
+  matchedAt   DateTime?
+  storedAt    DateTime?
+  completedAt DateTime?
+  canceledAt  DateTime?
+  expiresAt   DateTime? // storedAt + 48시간
+
+  seller      User      @relation("Seller", fields: [sellerId], references: [id])
+  buyer       User?     @relation("Buyer", fields: [buyerId], references: [id])
+  locker      Locker?   @relation(fields: [lockerId], references: [id])
+  qrTokens    QrToken[]
+  events      LockerEvent[]
+
+  @@index([sellerId])
+  @@index([buyerId])
+  @@index([status])
+}
+
+model Kiosk {
+  id          String    @id @default(cuid())
+  name        String
+  location    String?
+  apiKeyHash  String    @unique
+  lastSeenAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  lockers Locker[]
+}
+
+model Locker {
+  id              String        @id @default(cuid())
+  kioskId         String
+  number          Int  // 1, 2, 3
+  status          LockerStatus  @default(EMPTY)
+  pendingTradeId  String? // AWAIT_*  상태일 때 대상 거래
+  awaitUntil      DateTime? // AWAIT_* 만료 시각 (배정 + 60초)
+  doorOpen        Boolean       @default(false) // 마지막으로 보고된 문 상태
+  updatedAt       DateTime      @updatedAt
+
+  kiosk           Kiosk         @relation(fields: [kioskId], references: [id])
+  trade           Trade?
+  events          LockerEvent[]
+
+  @@unique([kioskId, number])
+}
+
+model QrToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique // 원문은 앱에만, DB엔 SHA-256 해시
+  tradeId   String
+  userId    String
+  purpose   QrPurpose
+  expiresAt DateTime  // 발급 + 5분
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  trade     Trade     @relation(fields: [tradeId], references: [id])
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@index([tradeId])
+}
+
+model LockerEvent {
+  id        String  @id @default(cuid())
+  lockerId  String
+  tradeId   String?
+  type      LockerEventType
+  createdAt DateTime  @default(now())
+
+  locker    Locker  @relation(fields: [lockerId], references: [id])
+  trade     Trade?  @relation(fields: [tradeId], references: [id])
+
+  @@index([lockerId, createdAt])
+}
